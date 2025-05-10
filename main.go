@@ -1,8 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
+	"sync"
 )
 
 type User struct {
@@ -32,6 +33,7 @@ type Transaction struct {
 type PaymentSystem struct {
 	Users        map[string]User
 	Transactions []Transaction
+	mutex        sync.Mutex
 }
 
 func (ps *PaymentSystem) AddUser(u User) {
@@ -45,36 +47,46 @@ func (ps *PaymentSystem) AddTransaction(t Transaction) {
 	ps.Transactions = append(ps.Transactions, t)
 }
 
-func (ps *PaymentSystem) ProcessingTransactions() error {
-	for _, t := range ps.Transactions {
-		fromUser, fromExist := ps.Users[t.FromID]
-		toUser, toExist := ps.Users[t.ToID]
+func (ps *PaymentSystem) ProcessingTransactions(t Transaction) error {
+	ps.mutex.Lock()
+	defer ps.mutex.Unlock()
 
-		if !fromExist {
-			return fmt.Errorf("user with ID %s not found", t.FromID)
-		}
-		if !toExist {
-			return fmt.Errorf("user with ID %s not found", t.ToID)
-		}
-		
-		if err := fromUser.Withdraw(t.Amount); err != nil {
-			return fmt.Errorf("error withdrawing from user %s: %v", t.FromID, err)
-		}
-		
-		toUser.Deposit(t.Amount)
+	fromUser, fromExist := ps.Users[t.FromID]
+	toUser, toExist := ps.Users[t.ToID]
 
-		ps.Users[t.FromID] = fromUser
-		ps.Users[t.ToID] = toUser
+	if !fromExist {
+		return fmt.Errorf("user with ID %s not found", t.FromID)
 	}
-	
-	ps.Transactions = nil
+	if !toExist {
+		return fmt.Errorf("user with ID %s not found", t.ToID)
+	}
+
+	if err := fromUser.Withdraw(t.Amount); err != nil {
+		return fmt.Errorf("error withdrawing from user %s: %v", t.FromID, err)
+	}
+
+	toUser.Deposit(t.Amount)
+
+	ps.Users[t.FromID] = fromUser
+	ps.Users[t.ToID] = toUser
+
 	return nil
+}
+
+func (ps *PaymentSystem) Worker(ch <-chan Transaction, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for t := range ch {
+		err := ps.ProcessingTransactions(t)
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+	}
 }
 
 func main() {
 
 	ps := &PaymentSystem{
-		Users: make(map[string]User),
+		Users:        make(map[string]User),
 		Transactions: []Transaction{},
 	}
 
@@ -89,19 +101,28 @@ func main() {
 	fmt.Println("Перевожу с UserID: 1 на UserID: 2 сумму в размере 200")
 	fmt.Println("Перевожу с UserID: 2 на UserID: 1 сумму в размере 50")
 
+	ch := make(chan Transaction, len(ps.Transactions))
+
 	ps.AddTransaction(Transaction{"1", "2", 200})
 	ps.AddTransaction(Transaction{"2", "1", 50})
 
-	if err := ps.ProcessingTransactions(); err != nil {
-		fmt.Println("Error processing transactions:", err)
-		return
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go ps.Worker(ch, &wg)
 	}
+
+	for _, t := range ps.Transactions {
+		ch <- t
+	}
+
+	close(ch)
+	wg.Wait()
 
 	fmt.Println("Итого")
 	fmt.Println("John's Balance:", ps.Users["1"].Balance)
 	fmt.Println("Petr's Balance:", ps.Users["2"].Balance)
 	fmt.Println("У первого пользователя должно получиться 850")
 	fmt.Println("У второго пользователя должно получиться 650")
-
 
 }
