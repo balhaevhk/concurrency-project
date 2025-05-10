@@ -10,13 +10,18 @@ type User struct {
 	ID      string
 	Name    string
 	Balance float64
+	mu sync.Mutex
 }
 
 func (u *User) Deposit(amount float64) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.Balance += amount
 }
 
 func (u *User) Withdraw(amount float64) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	if u.Balance < amount {
 		return errors.New("insufficient funds on balance")
 	}
@@ -31,14 +36,13 @@ type Transaction struct {
 }
 
 type PaymentSystem struct {
-	Users        map[string]User
+	Users        map[string]*User
 	Transactions []Transaction
-	mutex        sync.Mutex
 }
 
-func (ps *PaymentSystem) AddUser(u User) {
+func (ps *PaymentSystem) AddUser(u *User) {
 	if ps.Users == nil {
-		ps.Users = make(map[string]User)
+		ps.Users = make(map[string]*User)
 	}
 	ps.Users[u.ID] = u
 }
@@ -48,9 +52,6 @@ func (ps *PaymentSystem) AddTransaction(t Transaction) {
 }
 
 func (ps *PaymentSystem) ProcessingTransactions(t Transaction) error {
-	ps.mutex.Lock()
-	defer ps.mutex.Unlock()
-
 	fromUser, fromExist := ps.Users[t.FromID]
 	toUser, toExist := ps.Users[t.ToID]
 
@@ -86,7 +87,7 @@ func (ps *PaymentSystem) Worker(ch <-chan Transaction, wg *sync.WaitGroup) {
 func main() {
 
 	ps := &PaymentSystem{
-		Users:        make(map[string]User),
+		Users:        make(map[string]*User),
 		Transactions: []Transaction{},
 	}
 
@@ -95,8 +96,8 @@ func main() {
 	user1 := &User{ID: "1", Name: "John", Balance: 1000}
 	user2 := &User{ID: "2", Name: "Petr", Balance: 500}
 
-	ps.AddUser(*user1)
-	ps.AddUser(*user2)
+	ps.AddUser(user1)
+	ps.AddUser(user2)
 
 	fmt.Println("Перевожу с UserID: 1 на UserID: 2 сумму в размере 200")
 	fmt.Println("Перевожу с UserID: 2 на UserID: 1 сумму в размере 50")
